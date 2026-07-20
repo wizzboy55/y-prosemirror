@@ -5,8 +5,10 @@ import {
   defaultAttributedNodes,
   deltaToPNode,
   deltaToPSteps,
-  nodeToDelta
+  nodeToDelta,
+  pmToDeltaPath
 } from '../sync-utils.js'
+import { biasChangeTowardCaret } from '../caret-bias.js'
 
 const Y_PREFIX = 'y-attributed-'
 
@@ -232,6 +234,19 @@ export class ProsemirrorRdt extends ObservableV2 {
       next = nodeToDelta(this.view.state.doc, undefined, true)
       change = delta.diff(/** @type {any} */ (this._state), /** @type {any} */ (next), { compare: this.compare })
     }
+    if (!change.isEmpty()) {
+      // Re-anchor ambiguous diffs toward the caret before the change reaches
+      // Y — see src/caret-bias.js (CAVEATS.md "Diffing ambiguity"). The bias
+      // is anchor-only: applying the biased change to the previous state
+      // yields the same document, so `_state = next` stays correct.
+      try {
+        change = /** @type {any} */ (biasChangeTowardCaret(
+          /** @type {any} */ (change),
+          /** @type {any} */ (this._state),
+          pmToDeltaPath(this.view.state.doc, this.view.state.selection.from)
+        ))
+      } catch (_err) { /* selection may be unresolvable mid-teardown — keep the unbiased change */ }
+    }
     this._state = next
     if (!change.isEmpty()) {
       this.emit('delta', [(change), this])
@@ -305,8 +320,9 @@ export class ProsemirrorRdt extends ObservableV2 {
     // on this peer. Surface it so integrators can warn instead of losing
     // content silently (#258).
     if (this.onSchemaConflict != null) {
+      const conflictFix = /** @type {any} */ (fix)
       try {
-        this.onSchemaConflict({ change: d, fix: /** @type {any} */ (fix), wholesaleReplace })
+        this.onSchemaConflict({ change: d, fix: conflictFix, wholesaleReplace })
       } catch (err) {
         console.error('[y/prosemirror] onSchemaConflict handler threw', err)
       }

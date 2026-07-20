@@ -21,6 +21,7 @@ import * as convergenceFuzz from './convergence-fuzz.test.js'
 import * as indexeddb from './indexeddb.test.js'
 import * as migration from './migration.test.js'
 import * as schemaConflict from './schema-conflict.test.js'
+import * as caretBias from './caret-bias.test.js'
 // import * as tr from './tr.test.js'
 
 import { runTests } from 'lib0/testing'
@@ -78,7 +79,8 @@ runTests({
   convergenceFuzz,
   indexeddb,
   migration,
-  schemaConflict
+  schemaConflict,
+  caretBias
   // prosemirror,
   // tr
 }).then(success => {
