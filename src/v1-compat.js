@@ -18,6 +18,18 @@ import * as Y from '@y/y'
 import * as delta from 'lib0/delta'
 import { EditorState } from 'prosemirror-state'
 import { docToDelta, fragmentToPm, pmToFragment } from './sync-utils.js'
+import { syncPlugin } from './sync-plugin.js'
+
+/**
+ * v1: build the sync plugin pre-bound to a fragment. The v2 plugin binds the
+ * initial ytype as soon as the view is created; v1's `mapping` option is
+ * accepted and ignored (v2 keeps no external mapping state).
+ *
+ * @param {Y.Type} ytype
+ * @param {Record<string, unknown>} [_opts]
+ * @return {import('prosemirror-state').Plugin}
+ */
+export const ySyncPlugin = (ytype, _opts = {}) => syncPlugin(/** @type {any} */ ({ ytype }))
 
 /**
  * v1: convert a ProseMirror node into a (provided or fresh, unattached)

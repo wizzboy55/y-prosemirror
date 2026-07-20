@@ -85,8 +85,11 @@ export function syncPlugin (opts = {}) {
     state: {
       init: () => {
         return $syncPluginState.expect({
-          ytype: null,
-          renderer: null,
+          // an initial ytype/renderer binds as soon as the view is created —
+          // v1-style construction (`ySyncPlugin(fragment)`); configure later
+          // via configureYProsemirror as usual
+          ytype: /** @type {any} */ (opts).ytype ?? null,
+          renderer: /** @type {any} */ (opts).renderer ?? null,
           attributionMapper: opts.mapAttributionToMark || defaultMapAttributionToMark,
           attributedNodes: opts.attributedNodes || defaultAttributedNodes,
           customCompare: opts.customCompare || null
@@ -100,7 +103,7 @@ export function syncPlugin (opts = {}) {
         return object.assign({}, prevPluginState, stateUpdate, stateUpdate.renderer == null ? { renderer: Y.baseRenderer } : {})
       }
     },
-    view () {
+    view (editorView) {
       /**
        * @type {{ yRdt: YSyncRdt, pmRdt: ProsemirrorRdt, binding: import('lib0/delta/rdt').Binding<any, any> } | null}
        */
@@ -173,6 +176,14 @@ export function syncPlugin (opts = {}) {
           // as it actually happened — which are never re-paired by `diff`,
           // so `customCompare` does not apply there (see YSyncRdt).
         ), { diffCompare: compare ?? undefined })
+      }
+      {
+        // v1-style construction support: a ytype supplied at plugin creation
+        // is bound the moment the view exists (no configure dispatch needed)
+        const initialState = $syncPluginState.cast(ySyncPluginKey.getState(editorView.state))
+        if (initialState.ytype != null) {
+          setup(editorView, initialState)
+        }
       }
       return {
         update (view, prevState) {
