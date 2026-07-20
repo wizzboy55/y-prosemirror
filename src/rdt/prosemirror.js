@@ -103,13 +103,19 @@ export class ProsemirrorRdt extends ObservableV2 {
    * @param {boolean} [opts.gateInitialContent] the counterpart ytype has no
    *   children — gate the schema-default document instead of treating it as
    *   content (see "Initial-content gate" in the class doc)
+   * @param {SchemaConflictHandler?} [opts.onSchemaConflict] called when a
+   *   foreign change could not be represented as-is against the ProseMirror
+   *   schema and the binding had to reshape/drop/invent content (the `fix`
+   *   that is written back to Y) — the schema-invalid-merge case from
+   *   CAVEATS.md "Schema mismatches under concurrency"
    */
-  constructor ({ view, attributedNodes = defaultAttributedNodes, compare = null, getMeta, gateInitialContent = false }) {
+  constructor ({ view, attributedNodes = defaultAttributedNodes, compare = null, getMeta, gateInitialContent = false, onSchemaConflict = null }) {
     super()
     this.view = view
     this.attributedNodes = attributedNodes
     this.compare = compare ?? undefined
     this.getMeta = getMeta
+    this.onSchemaConflict = onSchemaConflict
     this.$delta = $prosemirrorDelta
     const snapshot = nodeToDelta(view.state.doc, undefined, true)
     const dflt = gateInitialContent ? view.state.doc.type.createAndFill() : null
@@ -263,6 +269,7 @@ export class ProsemirrorRdt extends ObservableV2 {
     }
     /** @type {import('prosemirror-state').Transaction} */
     let tr
+    let wholesaleReplace = false
     if (this._defaultFingerprint != null) {
       // initial-content gate: the first render replaces the gated
       // schema-default skeleton wholesale. Raw steps must not run here — a
@@ -277,6 +284,7 @@ export class ProsemirrorRdt extends ObservableV2 {
       } catch (_err) {
         // Raw steps could not express the change against the schema — replace
         // the whole document through ProseMirror's fitting `replaceWith`.
+        wholesaleReplace = true
         tr = this.view.state.tr
         tr.replaceWith(0, tr.doc.content.size, deltaToPNode(/** @type {any} */ (expected), tr.doc.type.schema, null, this.attributedNodes))
       }
@@ -290,7 +298,20 @@ export class ProsemirrorRdt extends ObservableV2 {
     const fix = delta.diff(/** @type {any} */ (expected), /** @type {any} */ (actual), { compare: this.compare, clone: true })
     this._state = actual
     this.emit('delta', [d, origin])
-    return fix.isEmpty() ? null : /** @type {any} */ (fix)
+    if (fix.isEmpty()) return null
+    // A non-empty fix means ProseMirror's schema could not represent the
+    // CRDT-merged state as-is: content was reshaped, dropped, or invented
+    // (createAndFill), and that resolution is about to be written back to Y
+    // on this peer. Surface it so integrators can warn instead of losing
+    // content silently (#258).
+    if (this.onSchemaConflict != null) {
+      try {
+        this.onSchemaConflict({ change: d, fix: /** @type {any} */ (fix), wholesaleReplace })
+      } catch (err) {
+        console.error('[y/prosemirror] onSchemaConflict handler threw', err)
+      }
+    }
+    return /** @type {any} */ (fix)
   }
 
   destroy () {

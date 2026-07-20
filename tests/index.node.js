@@ -20,6 +20,7 @@ import * as issueRepros from './issue-repros.test.js'
 import * as convergenceFuzz from './convergence-fuzz.test.js'
 import * as indexeddb from './indexeddb.test.js'
 import * as migration from './migration.test.js'
+import * as schemaConflict from './schema-conflict.test.js'
 // import * as tr from './tr.test.js'
 
 import { runTests } from 'lib0/testing'
@@ -76,7 +77,8 @@ runTests({
   issueRepros,
   convergenceFuzz,
   indexeddb,
-  migration
+  migration,
+  schemaConflict
   // prosemirror,
   // tr
 }).then(success => {

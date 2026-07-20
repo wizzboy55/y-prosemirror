@@ -36,6 +36,15 @@ declare type AttributedNodesPredicate = (nodeName: string, kinds: { insert?: boo
  * keep lib0's name-only default.
  */
 declare type NodeCompare = (a: import('lib0/delta').DeltaAny, b: import('lib0/delta').DeltaAny) => boolean
+/**
+ * Callback fired when a remote (CRDT-merged) change could not be represented
+ * against the ProseMirror schema and the binding had to reshape, drop, or
+ * invent content to recover (see CAVEATS.md "Schema mismatches under
+ * concurrency"). `change` is the incoming delta, `fix` what the binding
+ * altered relative to the merged state (also written back to Y),
+ * `wholesaleReplace` whether the whole document was re-fitted.
+ */
+declare type SchemaConflictHandler = (conflict: { change: import('lib0/delta').DeltaAny, fix: import('lib0/delta').DeltaAny, wholesaleReplace: boolean }) => void
 declare type SyncPluginState = import('lib0/schema').Unwrap<typeof import('@y/prosemirror').$syncPluginState>
 declare type SyncPluginStateUpdate = import('lib0/schema').Unwrap<typeof import('@y/prosemirror').$syncPluginStateUpdate>
 declare type ProsemirrorDelta = import('lib0/schema').Unwrap<typeof import('@y/prosemirror').$prosemirrorDelta>
