@@ -5,8 +5,11 @@ import * as positions from './positions.test.js'
 import * as suggestions from './suggestions.test.js'
 import * as suggestionSimulation from './suggestion-simulation.test.js'
 import * as attributedNodes from './attributed-nodes.test.js'
+import * as undo from './undo.test.js'
+import * as commands from './commands.test.js'
 import * as overlappingMarks from './overlapping-marks.test.js'
 import * as customCompare from './custom-compare.test.js'
+import * as ySyncRdt from './y-sync-rdt.test.js'
 import * as issueRepros from './issue-repros.test.js'
 // import * as tr from './tr.test.js'
 
@@ -24,8 +27,11 @@ runTests({
   suggestions,
   suggestionSimulation,
   attributedNodes,
+  undo,
+  commands,
   overlappingMarks,
   customCompare,
+  ySyncRdt,
   issueRepros
   // prosemirror,
   // tr
@@ -35,4 +41,7 @@ runTests({
     // @ts-ignore
     process.exit(success ? 0 : 1)
   }
+  // Signal completion to the browser-test harness (scripts/browser-tests.js).
+  // @ts-ignore
+  globalThis.__ypmTestResult = success
 })
