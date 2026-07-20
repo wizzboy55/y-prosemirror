@@ -51,30 +51,44 @@ export const configureYProsemirror = (opts = {}) => (state, dispatch) => {
 }
 
 /**
- * Undo the last user action
+ * Whether the sync binding is currently active. The undo/redo commands drive
+ * the *Yjs-level* UndoManager: while sync is paused (`ytype: null`) the view
+ * is disconnected from the Y document, so an undo would mutate the ydoc
+ * behind the paused editor's back — the view keeps showing the undone
+ * content and the divergence surfaces (destructively) on resume. The
+ * commands therefore no-op while paused.
+ *
+ * @param {import('prosemirror-state').EditorState} state
+ */
+const syncActive = state => ySyncPluginKey.getState(state)?.ytype != null
+
+/**
+ * Undo the last user action. No-op while sync is paused (see
+ * {@link syncActive}).
  *
  * @param {import('prosemirror-state').EditorState} state
  * @return {boolean} whether a change was undone
  */
-export const undo = state => yUndoPluginKey.getState(state)?.undoManager?.undo() != null
+export const undo = state => syncActive(state) && yUndoPluginKey.getState(state)?.undoManager?.undo() != null
 
 /**
- * Redo the last user action
+ * Redo the last user action. No-op while sync is paused (see
+ * {@link syncActive}).
  *
  * @param {import('prosemirror-state').EditorState} state
  * @return {boolean} whether a change was redone
  */
-export const redo = state => yUndoPluginKey.getState(state)?.undoManager?.redo() != null
+export const redo = state => syncActive(state) && yUndoPluginKey.getState(state)?.undoManager?.redo() != null
 
 /**
  * @type {import('prosemirror-state').Command}
  */
-export const undoCommand = (state, dispatch) => dispatch == null ? (yUndoPluginKey.getState(state)?.undoManager?.canUndo() || false) : undo(state)
+export const undoCommand = (state, dispatch) => dispatch == null ? (syncActive(state) && (yUndoPluginKey.getState(state)?.undoManager?.canUndo() || false)) : undo(state)
 
 /**
  * @type {import('prosemirror-state').Command}
  */
-export const redoCommand = (state, dispatch) => dispatch == null ? (yUndoPluginKey.getState(state)?.undoManager?.canRedo() || false) : redo(state)
+export const redoCommand = (state, dispatch) => dispatch == null ? (syncActive(state) && (yUndoPluginKey.getState(state)?.undoManager?.canRedo() || false)) : redo(state)
 
 /**
  * Reject changes between start and end

@@ -16,6 +16,7 @@ import * as indexeddb from './indexeddb.test.js'
 import * as migration from './migration.test.js'
 import * as schemaConflict from './schema-conflict.test.js'
 import * as caretBias from './caret-bias.test.js'
+import * as undoPause from './undo-pause.test.js'
 // import * as tr from './tr.test.js'
 
 import { runTests } from 'lib0/testing'
@@ -42,7 +43,8 @@ runTests({
   indexeddb,
   migration,
   schemaConflict,
-  caretBias
+  caretBias,
+  undoPause
   // prosemirror,
   // tr
 }).then(success => {
