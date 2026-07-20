@@ -69,8 +69,8 @@ export const testUndoNoopsWhilePaused = () => {
   const yBefore = JSON.stringify(ytype.toDelta({ deep: true }).toJSON())
   YPM.configureYProsemirror({ ytype: null })(view.state, view.dispatch)
 
-  t.assert(YPM.undo(view.state, view.dispatch) === false, 'undo reports no-op while paused')
-  t.assert(YPM.undoCommand(view.state, null) === false, 'undoCommand reports unavailable while paused')
+  t.assert(YPM.undo(view.state) === false, 'undo reports no-op while paused')
+  t.assert(YPM.undoCommand(view.state, undefined) === false, 'undoCommand reports unavailable while paused')
   t.assert(undoManager.undoStack.length === 1, 'undo stack untouched')
   t.assert(JSON.stringify(ytype.toDelta({ deep: true }).toJSON()) === yBefore, 'ydoc untouched by paused undo')
   t.assert(view.state.doc.textContent === 'one', 'view untouched by paused undo')
@@ -78,7 +78,7 @@ export const testUndoNoopsWhilePaused = () => {
   // resume: view and doc still agree, and undo works again
   YPM.configureYProsemirror({ ytype })(view.state, view.dispatch)
   t.assert(view.state.doc.textContent === 'one', 'resume renders the intact ydoc')
-  t.assert(YPM.undo(view.state, view.dispatch) === true, 'undo works after resume')
+  t.assert(YPM.undo(view.state) === true, 'undo works after resume')
   t.assert(view.state.doc.textContent === '', 'undo after resume reverts the synced edit')
   view.destroy()
 }
