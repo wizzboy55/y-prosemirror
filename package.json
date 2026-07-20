@@ -5,12 +5,13 @@
   "type": "module",
   "sideEffects": false,
   "funding": {
-    "type": "GitHub Sponsors ❤",
+    "type": "GitHub Sponsors \u2764",
     "url": "https://github.com/sponsors/dmonad"
   },
   "scripts": {
     "clean": "rm -rf dist",
     "dist": "npm run clean && PRODUCTION=1 tsc --skipLibCheck --noEmit false && test -e dist/src/index.d.ts",
+    "prepare": "npm run dist",
     "test": "node ./tests/index.node.js",
     "test:browser": "rollup -c && node ./scripts/browser-tests.js",
     "test:debug": "node --inspect-brk ./tests/index.node.js",
