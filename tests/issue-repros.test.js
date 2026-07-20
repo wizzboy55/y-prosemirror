@@ -12,6 +12,7 @@
  */
 
 import * as Y from '@y/y'
+import * as YPM from '@y/prosemirror'
 import * as delta from 'lib0/delta'
 import * as t from 'lib0/testing'
 import { schema } from './complexSchema.js'
@@ -132,23 +133,17 @@ export const testIssue244TypeIntoSuggestionDeletedText = () => {
  * With a pending suggestion in the paragraph, a view-mode user presses Enter
  * after the base text. Expected: the split is added as *original* content
  * (base doc gains the paragraph split; the new paragraph node carries no
- * insertion mark), and the pending suggestion stays pending.
+ * insertion mark), and the pending suggestion stays pending — it MOVES into
+ * the new paragraph instead of being flattened into base content.
  *
- * KNOWN FAILURE (skipped): the failure shape has *morphed* since the issue
- * was filed. On current master the view-mode split at the suggestion boundary
- * silently FLATTENS the pending suggestion into the base doc: the split's
- * insert side carries the suggested content with its `y-attributed-insert`
- * marks, the reverse transformer strips the `y-attributed-*` namespace ("the
- * view never attributes"), and the stripped content is written to base as
- * plain text — while the delete side removes it from the suggestion doc. Net:
- * pressing Enter next to someone's pending suggestion accepts it without
- * anyone asking. A proper fix needs the binding to recognize *moved*
- * attributed content and route it back into the suggestion overlay, which
- * requires renderer-aware attributed-insert support in `@y/y`'s `applyDelta`
- * (see ROADMAP.md). Remove the `t.skip()` to re-arm this repro.
+ * The fix has three cooperating parts: `buildAttributionCorrection` detects
+ * the move (inserted insert-marked content covered by attributed content
+ * deleted in the same change) and keeps the marks; the
+ * `movedAttributionToFormat` reverse converts those marks into delta
+ * attribution; and `YSyncRdt` applies that part in a non-local transaction,
+ * which the DiffRenderer does not forward to the base doc.
  */
 export const testIssue245ViewModeEnterNotSuggested = () => {
-  t.skip()
   const { viewBase, viewSuggestion, viewSuggestionMode } = mkSetup({ baseContent: 'Hello world' })
 
   // A pending suggestion: append " Greetings" at the end (pos 12).
@@ -178,19 +173,85 @@ export const testIssue245ViewModeEnterNotSuggested = () => {
     ]
   }, '#245: base doc received the paragraph split as original content')
 
-  // Both suggestion renders agree, and the new paragraph node itself is NOT
-  // marked as a suggested insertion (its content — the pending " Greetings"
-  // suggestion — still is).
-  t.compare(
-    JSON.parse(JSON.stringify(viewSuggestion.state.doc.toJSON())),
-    JSON.parse(JSON.stringify(viewSuggestionMode.state.doc.toJSON())),
-    '#245: view-mode and suggestion-mode peers converge'
+  // The pending suggestion survives the move into the new paragraph, still
+  // rendered as a suggested insertion; the paragraph node itself is original
+  // content.
+  const expectedRendered = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Hello world' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: ' Greetings', marks: [insertionMark] }] }
+    ]
+  }
+  assertDocJSON(viewSuggestion.state.doc, expectedRendered,
+    '#245: the pending suggestion moved into the new paragraph, still pending')
+  assertDocJSON(viewSuggestionMode.state.doc, expectedRendered,
+    '#245: suggestion-mode peer converges to the same render')
+
+  // Accepting materializes the moved suggestion where it now lives.
+  YPM.acceptAllChanges()(viewSuggestion.state, viewSuggestion.dispatch)
+  assertDocJSON(viewBase.state.doc, {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Hello world' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: ' Greetings' }] }
+    ]
+  }, '#245: accept-all lands the moved suggestion in the new paragraph')
+}
+
+/**
+ * The join counterpart of #245: a view-mode Backspace merges a paragraph
+ * whose tail is a pending suggestion into the previous paragraph. The base
+ * parts of the merged content commit to base; the pending suggestion moves
+ * along and stays a suggestion.
+ */
+export const testIssue245ViewModeJoinKeepsSuggestion = () => {
+  const { doc, viewBase, viewSuggestion, viewSuggestionMode } = mkSetup()
+  doc.get('prosemirror').applyDelta(
+    delta.create().insert([
+      delta.create('paragraph', {}, 'Hello'),
+      delta.create('paragraph', {}, 'world')
+    ]).done()
   )
-  const secondPara = viewSuggestion.state.doc.child(1)
-  t.assert(
-    !secondPara.marks.some(m => m.type.name === 'y-attributed-insert'),
-    '#245: the split-off paragraph node is original content, not a suggested insertion'
-  )
+  // Suggest appending "!!" to the second paragraph (rendered end pos 13).
+  viewSuggestionMode.dispatch(viewSuggestionMode.state.tr.insertText('!!', 13))
+  assertDocJSON(viewSuggestion.state.doc, {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Hello' }] },
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'world' },
+          { type: 'text', text: '!!', marks: [insertionMark] }
+        ]
+      }
+    ]
+  }, '#245-join pre: "!!" is a pending suggestion in the second paragraph')
+
+  // View-mode user backspace-joins the paragraphs (boundary at pos 7).
+  viewSuggestion.dispatch(viewSuggestion.state.tr.join(7))
+
+  // Base: paragraphs merged, suggested "!!" not materialized.
+  assertDocJSON(viewBase.state.doc, {
+    type: 'doc',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Helloworld' }] }]
+  }, '#245-join: base merged without the pending suggestion')
+
+  const expectedRendered = {
+    type: 'doc',
+    content: [{
+      type: 'paragraph',
+      content: [
+        { type: 'text', text: 'Helloworld' },
+        { type: 'text', text: '!!', marks: [insertionMark] }
+      ]
+    }]
+  }
+  assertDocJSON(viewSuggestion.state.doc, expectedRendered,
+    '#245-join: the suggestion moved along with the join, still pending')
+  assertDocJSON(viewSuggestionMode.state.doc, expectedRendered,
+    '#245-join: suggestion-mode peer converges')
 }
 
 /**

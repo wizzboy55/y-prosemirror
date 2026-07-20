@@ -820,6 +820,136 @@ export const deltaToPNode = (d, schema, dformat, attributedNodes = defaultAttrib
 }
 
 /**
+ * Whether any data op in `d` (recursively) carries insert attribution — the
+ * marker `movedAttributionToFormat` sets on *moved pending suggestions*
+ * (upstream #245; the view itself never attributes).
+ *
+ * @param {delta.DeltaAny} d
+ * @return {boolean}
+ */
+export const hasMovedInsertions = (d) => {
+  for (const op of d.children) {
+    if (delta.$textOp.check(op)) {
+      if (/** @type {any} */ (op).attribution?.insert != null) return true
+    } else if (delta.$insertOp.check(op)) {
+      if (/** @type {any} */ (op).attribution?.insert != null) return true
+      for (const el of op.insert) {
+        if (delta.$deltaAny.check(el) && hasMovedInsertions(el)) return true
+      }
+    } else if (delta.$modifyOp.check(op)) {
+      if (hasMovedInsertions(op.value)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Split a view-originated change into its base part and its *moved pending
+ * suggestions* (data ops carrying insert attribution — see
+ * {@link hasMovedInsertions}):
+ *
+ * - `base`: the change with the moved inserts removed — safe to apply as a
+ *   normal (base-committing) write;
+ * - `moved`: only the moved inserts, re-addressed in the coordinates of the
+ *   post-`base` document (nested occurrences via `modify` chains), or `null`
+ *   when the change contains none.
+ *
+ * Applying `base` then `moved` reproduces exactly `d`'s content; the point of
+ * the split is that the caller can apply `moved` in a *non-local* transaction,
+ * which a `DiffRenderer` will not forward to the base doc — the content lands
+ * in the suggestion overlay only and stays a pending suggestion (#245).
+ *
+ * @param {delta.DeltaAny} d
+ * @return {{ base: delta.DeltaAny, moved: delta.DeltaAny | null }}
+ */
+export const splitMovedInsertions = (d) => {
+  if (!hasMovedInsertions(d)) return { base: d, moved: null }
+  const base = /** @type {delta.DeltaBuilderAny} */ (delta.create(d.name ?? undefined))
+  const moved = /** @type {delta.DeltaBuilderAny} */ (delta.create(d.name ?? undefined))
+  // attrs stay on the base write
+  for (const attr of d.attrs) {
+    const key = /** @type {string} */ (attr.key)
+    if (delta.$setAttrOp.check(attr)) {
+      base.setAttr(key, attr.value, /** @type {any} */ (attr).attribution ?? undefined)
+    } else if (delta.$deleteAttrOp.check(attr)) {
+      base.deleteAttr(key)
+    } else if (delta.$modifyAttrOp.check(attr)) {
+      base.modifyAttr(key, /** @type {any} */ (attr.value))
+    }
+  }
+  let basePos = 0 // position in the post-`base` document at this level
+  let consumedBase = 0 // post-`base` positions `moved` has consumed (retain/modify)
+  let movedAny = false
+  const gapTo = (/** @type {number} */ pos) => {
+    if (pos > consumedBase) {
+      moved.retain(pos - consumedBase)
+      consumedBase = pos
+    }
+  }
+  for (const op of d.children) {
+    if (delta.$retainOp.check(op)) {
+      base.retain(op.retain, op.format, /** @type {any} */ (op).attribution)
+      basePos += op.retain
+    } else if (delta.$deleteOp.check(op)) {
+      base.delete(op.delete)
+    } else if (delta.$textOp.check(op)) {
+      if (/** @type {any} */ (op).attribution?.insert != null) {
+        gapTo(basePos)
+        moved.insert(op.insert, op.format, /** @type {any} */ (op).attribution)
+        movedAny = true
+      } else {
+        base.insert(op.insert, op.format, /** @type {any} */ (op).attribution ?? undefined)
+        basePos += op.insert.length
+      }
+    } else if (delta.$insertOp.check(op)) {
+      if (/** @type {any} */ (op).attribution?.insert != null) {
+        // whole elements moved into the suggestion overlay
+        gapTo(basePos)
+        moved.insert(op.insert.map(el => delta.$deltaAny.check(el) ? /** @type {any} */ (delta.cloneDeep(el)).done(false) : el), op.format, /** @type {any} */ (op).attribution)
+        movedAny = true
+      } else {
+        for (const el of op.insert) {
+          if (delta.$deltaAny.check(el) && hasMovedInsertions(el)) {
+            // a plain (base) node whose descendants carry moved suggestions:
+            // insert the stripped node in base, address the moved content
+            // through a modify at this node's post-`base` position
+            const sub = splitMovedInsertions(el)
+            base.insert([sub.base], op.format, /** @type {any} */ (op).attribution ?? undefined)
+            if (sub.moved != null) {
+              gapTo(basePos)
+              moved.modify(/** @type {any} */ (sub.moved))
+              consumedBase = basePos + 1
+              movedAny = true
+            }
+          } else {
+            base.insert([el], op.format, /** @type {any} */ (op).attribution ?? undefined)
+          }
+          basePos += 1
+        }
+      }
+    } else { // $modifyOp
+      const sub = splitMovedInsertions(op.value)
+      if (!sub.base.isEmpty() || op.format !== undefined || /** @type {any} */ (op).attribution !== undefined) {
+        base.modify(/** @type {any} */ (sub.base), op.format, /** @type {any} */ (op).attribution)
+      } else {
+        base.retain(1)
+      }
+      if (sub.moved != null) {
+        gapTo(basePos)
+        moved.modify(/** @type {any} */ (sub.moved))
+        consumedBase = basePos + 1
+        movedAny = true
+      }
+      basePos += 1
+    }
+  }
+  return {
+    base: /** @type {delta.DeltaAny} */ (base.done(false)),
+    moved: movedAny ? /** @type {delta.DeltaAny} */ (moved.done(false)) : null
+  }
+}
+
+/**
  * @param {Node} beforeDoc
  * @param {Node} afterDoc
  */

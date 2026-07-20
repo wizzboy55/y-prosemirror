@@ -5,23 +5,46 @@ ordered by how much they matter for shipping an editor on Yjs v14.
 CAVEATS.md documents the *inherent* tradeoffs; this file tracks the
 *actionable* ones.
 
-## Open — needs upstream work
+## Fixed in this fork
 
 ### View-mode structural edits at suggestion boundaries (upstream #245)
 
-A view-mode (commit-to-base) Enter/join at the boundary of a pending
-suggestion silently **flattens the suggestion into the base document**: the
-moved content's `y-attributed-insert` marks are stripped by the reverse
-transformer ("the view never attributes") and written to base as plain text,
-while the delete side removes the suggestion from the suggestion doc — the
-user's Enter effectively accepts someone else's pending suggestion.
+Previously a view-mode (commit-to-base) Enter/join at the boundary of a
+pending suggestion silently **flattened the suggestion into the base
+document** — the user's Enter effectively accepted someone else's pending
+suggestion. Fixed by three cooperating pieces, no `@y/y` changes needed:
 
-Repro: `tests/issue-repros.test.js` → `testIssue245ViewModeEnterNotSuggested`
-(skipped; remove the `t.skip()` to re-arm). A proper fix needs the binding to
-recognize *moved* attributed content and route it back into the suggestion
-overlay — i.e. renderer-aware attributed-insert support in `@y/y`'s
-`applyDelta`. Until then: treat view-mode structural edits around pending
-suggestions as hazardous.
+1. `buildAttributionCorrection` (rdt/prosemirror.js) detects *moves*: an
+   inserted run still carrying `y-attributed-insert` marks whose characters
+   are covered by insert-attributed content deleted in the same change keeps
+   its marks (typed-inherited marks — the #244 case — still get corrected).
+2. The `movedAttributionToFormat` reverse (transformers/attribution-to-format.js)
+   converts those marks into delta attribution instead of stripping them.
+3. `YSyncRdt` splits the change (`splitMovedInsertions`) and applies the
+   moved part in a **non-local transaction** (`transact(doc, fn, origin,
+   false)`), which the `DiffRenderer`'s forward-to-base listener ignores —
+   the content lands in the suggestion overlay only and is re-attributed as
+   a pending suggestion.
+
+Tests: `testIssue245ViewModeEnterNotSuggested` (split + accept-all) and
+`testIssue245ViewModeJoinKeepsSuggestion` in `tests/issue-repros.test.js`.
+
+Known limitations of the fix:
+
+- **Authorship may transfer.** The moved items are re-created by the moving
+  client, so the renderer re-attributes them to the *mover's* user mapping
+  (Yjs has no move primitive — a CRDT-level constraint). The suggestion stays
+  pending; only the attributed author can change.
+- Move detection is a per-change character-multiset cover: a transaction that
+  simultaneously types new text *and* deletes identical attributed text could
+  keep marks on the typed text (it becomes a suggestion rather than base
+  content). Single PM transactions rarely mix both; the failure mode is
+  conservative (nothing is silently accepted).
+- Only `y-attributed-insert` moves are preserved. Moving *suggestion-deleted*
+  (struck-through) content still un-suggests its deletion — the moved copy
+  becomes plain base content.
+
+## Open — needs upstream work
 
 ### Merge-on-resume for paused sync
 
@@ -83,6 +106,7 @@ Fork patches that are general and intended as upstream PRs to
 
 | patch | where |
 | --- | --- |
+| moved pending suggestions survive view-mode splits/joins (#245) | `src/rdt/prosemirror.js`, `src/rdt/y-sync.js`, `src/transformers/attribution-to-format.js`, `src/sync-utils.js` |
 | attr-change suggestions render as `y-attributed-format` (#255) | `src/sync-utils.js`, `src/transformers/rendered-attributions.js` |
 | caret-biased diffing (CAVEATS "Diffing ambiguity") | `src/caret-bias.js`, `src/rdt/prosemirror.js` |
 | `onSchemaConflict` surfacing hook (#258) | `src/rdt/prosemirror.js`, `src/sync-plugin.js` |

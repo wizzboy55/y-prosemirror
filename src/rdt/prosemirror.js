@@ -336,6 +336,167 @@ export class ProsemirrorRdt extends ObservableV2 {
   }
 }
 
+const Y_INSERT_KEY = 'y-attributed-insert'
+
+/**
+ * Add every character of `text` to the moved-content pool.
+ *
+ * @param {Map<string, number>} pool
+ * @param {string} text
+ */
+const poolAdd = (pool, text) => {
+  for (const c of text) pool.set(c, (pool.get(c) ?? 0) + 1)
+}
+
+/**
+ * Whether the pool covers every character of `text`; when it does, consume
+ * them. All-or-nothing so partially-covered inserts stay corrected.
+ *
+ * @param {Map<string, number>} pool
+ * @param {string} text
+ * @return {boolean}
+ */
+const poolTake = (pool, text) => {
+  if (pool.size === 0 || text.length === 0) return false
+  /** @type {Map<string, number>} */
+  const need = new Map()
+  for (const c of text) need.set(c, (need.get(c) ?? 0) + 1)
+  for (const [c, n] of need) {
+    if ((pool.get(c) ?? 0) < n) return false
+  }
+  for (const [c, n] of need) {
+    pool.set(c, /** @type {number} */ (pool.get(c)) - n)
+  }
+  return true
+}
+
+/**
+ * Non-consuming variant of {@link poolTake}.
+ *
+ * @param {Map<string, number>} pool
+ * @param {string} text
+ * @return {boolean}
+ */
+const poolCovers = (pool, text) => {
+  if (pool.size === 0) return text.length === 0
+  /** @type {Map<string, number>} */
+  const need = new Map()
+  for (const c of text) need.set(c, (need.get(c) ?? 0) + 1)
+  for (const [c, n] of need) {
+    if ((pool.get(c) ?? 0) < n) return false
+  }
+  return true
+}
+
+/**
+ * Collect the insert-attributed text of a settled state node subtree into
+ * the pool. `inherited` marks a subtree whose root op already carried the
+ * insert attribution (a wholly-suggested node): all its text counts.
+ *
+ * @param {Map<string, number>} pool
+ * @param {delta.DeltaAny} node
+ * @param {boolean} inherited
+ */
+const poolCollectNode = (pool, node, inherited) => {
+  for (const op of node.children) {
+    if (delta.$textOp.check(op)) {
+      if (inherited || op.format?.[Y_INSERT_KEY] != null) poolAdd(pool, op.insert)
+    } else if (delta.$insertOp.check(op)) {
+      const ins = inherited || op.format?.[Y_INSERT_KEY] != null
+      for (const el of op.insert) {
+        if (delta.$deltaAny.check(el)) poolCollectNode(pool, el, ins)
+      }
+    }
+  }
+}
+
+/**
+ * The full text of a settled node subtree (for whole-node move cover checks).
+ *
+ * @param {delta.DeltaAny} node
+ * @return {string}
+ */
+const nodeText = (node) => {
+  let out = ''
+  for (const op of node.children) {
+    if (delta.$textOp.check(op)) {
+      out += op.insert
+    } else if (delta.$insertOp.check(op)) {
+      for (const el of op.insert) {
+        if (delta.$deltaAny.check(el)) out += nodeText(el)
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Collect the multiset of insert-attributed characters DELETED by `change`
+ * (their attribution read from `state` at the deleted positions). This is the
+ * "source side" of move detection: an inserted run still carrying
+ * `y-attributed-insert` marks whose characters are covered by this pool is a
+ * *moved* pending suggestion (split/join/drag), not freshly typed content.
+ *
+ * @param {delta.DeltaAny} change
+ * @param {delta.DeltaAny | null} state
+ * @param {Map<string, number>} pool
+ * @return {Map<string, number>}
+ */
+const collectMovedPool = (change, state, pool = new Map()) => {
+  let cur = state == null ? null : state.children.start
+  let off = 0
+  const advance = () => {
+    if (cur != null && off >= cur.length) {
+      cur = cur.next
+      off = 0
+    }
+  }
+  /**
+   * @param {number} rem
+   * @return {{ take: number, format: Record<string, any> | null | undefined, el: any, text: string | null }}
+   */
+  const readRun = (rem) => {
+    if (cur == null) return { take: rem, format: null, el: null, text: null }
+    const take = Math.min(cur.length - off, rem)
+    const format = /** @type {any} */ (cur).format
+    const el = delta.$insertOp.check(cur) ? cur.insert[off] : null
+    const text = delta.$textOp.check(cur) ? cur.insert.slice(off, off + take) : null
+    off += take
+    advance()
+    return { take, format, el, text }
+  }
+  for (const op of change.children) {
+    if (delta.$retainOp.check(op)) {
+      let rem = op.retain
+      while (rem > 0) {
+        if (cur == null) break
+        const take = Math.min(cur.length - off, rem)
+        off += take
+        rem -= take
+        advance()
+      }
+    } else if (delta.$deleteOp.check(op)) {
+      let rem = op.delete
+      while (rem > 0) {
+        const hadCursor = cur != null
+        const run = readRun(rem)
+        if (run.text != null) {
+          if (run.format?.[Y_INSERT_KEY] != null) poolAdd(pool, run.text)
+        } else if (delta.$deltaAny.check(run.el)) {
+          poolCollectNode(pool, run.el, run.format?.[Y_INSERT_KEY] != null)
+        }
+        rem -= run.take
+        if (!hadCursor) break
+      }
+    } else if (delta.$modifyOp.check(op)) {
+      const { el } = readRun(1)
+      collectMovedPool(op.value, delta.$deltaAny.check(el) ? el : null, pool)
+    }
+    // text/insert data ops consume no state positions
+  }
+  return pool
+}
+
 /**
  * Build the corrective delta that reverts every change `change` makes to the
  * read-only `y-attributed-*` projection, in *post-change* coordinates (so it
@@ -346,7 +507,14 @@ export class ProsemirrorRdt extends ObservableV2 {
  *   none),
  * - inserted content carrying `y-attributed-*` formats (marks inherited from
  *   an attributed neighborhood, or attributed content pasted back in) → remove
- *   them, recursively for inserted subtrees.
+ *   them, recursively for inserted subtrees —
+ * - **except moved pending insertions** (#245): an inserted run whose
+ *   `y-attributed-insert`-marked characters are covered by insert-attributed
+ *   content *deleted in the same change* (the {@link collectMovedPool} pool)
+ *   is a structural move of a pending suggestion (split, join, drag). Its
+ *   insert marks are kept — the view keeps rendering the suggestion, and the
+ *   emitted change carries the marks so the data side can route the content
+ *   back into the suggestion overlay.
  *
  * Returns `null` when `change` does not touch the projection.
  *
@@ -354,7 +522,16 @@ export class ProsemirrorRdt extends ObservableV2 {
  * @param {delta.DeltaAny | null} state the pre-change snapshot
  * @return {delta.DeltaBuilderAny | null}
  */
-const buildAttributionCorrection = (change, state) => {
+const buildAttributionCorrection = (change, state) =>
+  _buildAttributionCorrection(change, state, collectMovedPool(change, state))
+
+/**
+ * @param {delta.DeltaAny} change
+ * @param {delta.DeltaAny | null} state
+ * @param {Map<string, number>} movedPool
+ * @return {delta.DeltaBuilderAny | null}
+ */
+const _buildAttributionCorrection = (change, state, movedPool) => {
   const correction = /** @type {delta.DeltaBuilderAny} */ (delta.create())
   let touched = false
   // read cursor over `state`'s children (retain/delete/modify consume state
@@ -404,17 +581,19 @@ const buildAttributionCorrection = (change, state) => {
   }
   /**
    * The format-remove for every `y-attributed-*` key present on inserted
-   * content.
+   * content. When `keepInsert` (a detected move of a pending suggestion),
+   * the `y-attributed-insert` key survives.
    *
    * @param {Record<string, any> | null | undefined} format
+   * @param {boolean} [keepInsert]
    * @return {Record<string, any> | null}
    */
-  const clearFormat = (format) => {
+  const clearFormat = (format, keepInsert = false) => {
     /** @type {Record<string, any>} */
     const clear = {}
     let any = false
     for (const k in format) {
-      if (k.startsWith(Y_PREFIX)) {
+      if (k.startsWith(Y_PREFIX) && !(keepInsert && k === Y_INSERT_KEY)) {
         clear[k] = null
         any = true
       }
@@ -456,17 +635,26 @@ const buildAttributionCorrection = (change, state) => {
         advance()
       }
     } else if (delta.$textOp.check(op)) {
-      const clear = clearFormat(op.format)
+      // an insert-marked run whose characters were deleted (as attributed
+      // content) in this same change is a *moved* pending suggestion — keep
+      // its insert mark (#245)
+      const moved = op.format?.[Y_INSERT_KEY] != null && poolTake(movedPool, op.insert)
+      const clear = clearFormat(op.format, moved)
       correction.retain(op.insert.length, clear ?? undefined)
       if (clear != null) touched = true
     } else if (delta.$insertOp.check(op)) {
-      const clear = clearFormat(op.format)
+      const opInsMarked = op.format?.[Y_INSERT_KEY] != null
+      // whole-node move: the op carries the insert mark and the inserted
+      // subtree's text is covered by attributed content deleted in this change
+      const moved = opInsMarked && poolCovers(movedPool, op.insert.map(el => delta.$deltaAny.check(el) ? nodeText(el) : '').join(''))
+      const clear = clearFormat(op.format, moved)
       if (clear != null) touched = true
       for (const el of op.insert) {
         if (delta.$deltaAny.check(el)) {
           // recurse: freshly inserted subtrees must not carry the projection
-          // anywhere inside either
-          const sub = buildAttributionCorrection(el, null)
+          // anywhere inside either — except their own moved runs, which check
+          // against the same pool
+          const sub = _buildAttributionCorrection(el, null, movedPool)
           if (sub != null) {
             touched = true
             correction.modify(sub, clear ?? undefined)
@@ -480,7 +668,7 @@ const buildAttributionCorrection = (change, state) => {
     } else { // $modifyOp
       const { format, el } = readRun(1)
       const restore = restoreFormat(op.format, format)
-      const sub = buildAttributionCorrection(op.value, delta.$deltaAny.check(el) ? el : null)
+      const sub = _buildAttributionCorrection(op.value, delta.$deltaAny.check(el) ? el : null, movedPool)
       if (restore != null || sub != null) touched = true
       if (sub != null) {
         correction.modify(sub, restore ?? undefined)

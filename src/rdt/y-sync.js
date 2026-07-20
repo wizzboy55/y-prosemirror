@@ -1,6 +1,7 @@
 import { ObservableV2 } from 'lib0/observable'
 import * as delta from 'lib0/delta'
-import { $prosemirrorDelta } from '../sync-utils.js'
+import { transact } from '@y/y'
+import { $prosemirrorDelta, splitMovedInsertions } from '../sync-utils.js'
 
 /**
  * The Y side of the sync binding: a thin lib0-`RDT` wrapper around a
@@ -229,16 +230,32 @@ export class YSyncRdt extends ObservableV2 {
     // synchronously inside it and must not shift the baseline.
     const expected = delta.cloneDeep(/** @type {any} */ (this.delta))
     expected.apply(delta.cloneDeep(/** @type {any} */ (d)), { final: true, move: true })
+    // Moved pending suggestions (#245): data ops carrying insert attribution
+    // are a view-mode structural move of suggestion content (split/join/drag
+    // — see buildAttributionCorrection's move detection and the
+    // movedAttributionToFormat reverse). They must NOT be written as a
+    // base-committing change: split them off and apply them in a *non-local*
+    // transaction, which the DiffRenderer's forward-to-base listener ignores
+    // (`tr.local` guard) — the content lands in the suggestion overlay only
+    // and is re-attributed as a pending suggestion on render.
+    const { base, moved } = splitMovedInsertions(d)
     this._applying = true
     try {
-      doc.transact(() => {
-        // `applyDelta` returns its own revert fix for the parts it cannot
-        // apply (e.g. a `modify` into a suggestion-deleted node is reverted).
-        // We intentionally ignore it: the diff below is computed against the
-        // post-write state and subsumes it — returning both would
-        // double-apply the correction.
-        this.ytype.applyDelta(d, this.origin, { renderer: this.renderer })
-      }, this.origin)
+      if (!base.isEmpty()) {
+        doc.transact(() => {
+          // `applyDelta` returns its own revert fix for the parts it cannot
+          // apply (e.g. a `modify` into a suggestion-deleted node is reverted).
+          // We intentionally ignore it: the diff below is computed against the
+          // post-write state and subsumes it — returning both would
+          // double-apply the correction.
+          this.ytype.applyDelta(base, this.origin, { renderer: this.renderer })
+        }, this.origin)
+      }
+      if (moved != null && !moved.isEmpty()) {
+        transact(doc, () => {
+          this.ytype.applyDelta(moved, this.origin, { renderer: this.renderer })
+        }, this.origin, false)
+      }
     } catch (err) {
       // Last-resort safety: should the Y-side apply ever throw mid-transact,
       // the ops before the failing one have already been applied — do NOT

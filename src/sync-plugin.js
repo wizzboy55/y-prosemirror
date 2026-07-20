@@ -8,6 +8,7 @@ import {
 import { YSyncRdt } from './rdt/y-sync.js'
 import { ProsemirrorRdt } from './rdt/prosemirror.js'
 import { renderedAttributions } from './transformers/rendered-attributions.js'
+import { movedAttributionToFormat } from './transformers/attribution-to-format.js'
 import { bind } from 'lib0/delta/rdt'
 import * as dt from 'lib0/delta/transformer'
 import { ySyncPluginKey } from './keys.js'
@@ -159,7 +160,12 @@ export function syncPlugin (opts = {}) {
           // overlay (see transformers/rendered-attributions.js for why)
           (/** @type {s.Schema<any>} */ $d2) => renderedAttributions($d2, () => yRdt.delta),
           ...(opts.transformers ?? []),
-          (/** @type {s.Schema<any>} */ $d2) => dt.attributionToFormat($d2, conf)
+          // lib0's attributionToFormat with a move-aware reverse: a
+          // y-attributed-insert format on view-inserted data content (a moved
+          // pending suggestion — see buildAttributionCorrection's move
+          // detection, #245) converts to delta attribution instead of being
+          // stripped, so YSyncRdt can route it back into the suggestion doc
+          (/** @type {s.Schema<any>} */ $d2) => movedAttributionToFormat($d2, conf)
           // `diffCompare` applies `customCompare` to the initial-state sync
           // diff as well. The RDTs' own diffs (view-side pulls, fixes, the
           // Y side's uncertain-window emissions) already use it; the Y side's
