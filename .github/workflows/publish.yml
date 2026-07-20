@@ -1,40 +1,14 @@
 name: Publish to npm
 
+# Fork note: upstream auto-publishes on every master push once tests pass.
+# In this fork publishing is manual-only so nothing is released by accident.
+# Requires an NPM_TOKEN repository secret with publish rights on the
+# @wizzboy55 scope (or run `npm publish` locally instead).
 on:
-  workflow_run:
-    workflows: ["Test"]
-    types: [completed]
-    branches: [master]
+  workflow_dispatch:
 
 jobs:
-  check:
-    if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      should_publish: ${{ steps.version-check.outputs.should_publish }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24.x
-      - name: Check if version is already published
-        id: version-check
-        run: |
-          NAME=$(node -p "require('./package.json').name")
-          LOCAL=$(node -p "require('./package.json').version")
-          if npm view "${NAME}@${LOCAL}" version 2>/dev/null; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "Version $LOCAL already published, skipping."
-          else
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-            echo "New version detected: $LOCAL"
-          fi
-
   publish:
-    needs: check
-    if: needs.check.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,7 +18,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24.x
+          registry-url: https://registry.npmjs.org
       - run: npm ci
+      - name: Test
+        run: npm test
       - name: Build
         run: npm run dist
       - name: Determine npm tag
@@ -57,7 +34,9 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish
-        run: npm publish --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Create GitHub Release
         run: |
           VERSION=$(node -p "require('./package.json').version")

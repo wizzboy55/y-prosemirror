@@ -1,12 +1,34 @@
-# y-prosemirror
+# y-prosemirror (fork)
 
 > [ProseMirror](http://prosemirror.net/) Binding for [Yjs](https://github.com/yjs/yjs) - [Demo](https://demos.yjs.dev/prosemirror/prosemirror.html)
 
+> [!IMPORTANT]
+> This is a **soft fork of [yjs/y-prosemirror](https://github.com/yjs/y-prosemirror)**
+> (the Yjs v14 / `@y/prosemirror` development line), published as
+> `@wizzboy55/y-prosemirror`. Fork policy:
+>
+> - `master` tracks upstream `yjs/y-prosemirror` master and carries no fork commits.
+> - `dev` is the fork's integration branch: upstream master + fork patches.
+>   Generally useful fixes are intended to be upstreamed as PRs.
+> - The entire Yjs v14 RC stack is **pinned to exact versions**
+>   (`@y/y@14.0.0-rc.23`, `lib0@1.0.0-rc.22`, `@y/protocols@1.0.6-rc.1`,
+>   `@y/websocket@4.0.0-rc.2`) because upstream still ships breaking changes
+>   between release candidates. Bump these deliberately, never via `^` drift.
+> - `@y/y` is a **peerDependency** here (upstream has it as a dependency):
+>   your app must depend on exactly one copy of `@y/y`, otherwise you get two
+>   CRDT runtimes and `instanceof` checks break across them. The same applies
+>   to `lib0` — keep it deduped to a single instance.
+> - Install via git while unpublished:
+>   `npm i github:wizzboy55/y-prosemirror#dev` (plus `@y/y@14.0.0-rc.23`).
+>
+> See [`MIGRATION.md`](./MIGRATION.md) for moving documents and code from
+> y-prosemirror v1 / Yjs v13, and [`ROADMAP.md`](./ROADMAP.md) for known gaps.
+
 > [!NOTE]
-> The `main` branch of this repository is the development branch for the unstable
+> Upstream's `main` branch is the development branch for the unstable
 > `@y/prosemirror` release, which adds support for Yjs v14 (`@y/y`). Most users
 > should continue to use the stable `y-prosemirror` package with Yjs v13 for now.
-> The documentation below applies to the stable `y-prosemirror` release.
+> Parts of the documentation below still describe the stable `y-prosemirror` release.
 
 This binding maps a Y.XmlFragment to the ProseMirror state.
 

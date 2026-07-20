@@ -1,7 +1,7 @@
 {
-  "name": "@y/prosemirror",
+  "name": "@wizzboy55/y-prosemirror",
   "version": "2.0.0-6",
-  "description": "Prosemirror bindings for Yjs",
+  "description": "Prosemirror bindings for Yjs v14 (fork of @y/prosemirror)",
   "type": "module",
   "sideEffects": false,
   "funding": {
@@ -34,7 +34,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yjs/y-prosemirror.git"
+    "url": "git+https://github.com/wizzboy55/y-prosemirror.git"
   },
   "keywords": [
     "Yjs"
@@ -49,15 +49,15 @@
     ]
   },
   "bugs": {
-    "url": "https://github.com/yjs/y-prosemirror/issues"
+    "url": "https://github.com/wizzboy55/y-prosemirror/issues"
   },
-  "homepage": "https://github.com/yjs/y-prosemirror#readme",
+  "homepage": "https://github.com/wizzboy55/y-prosemirror#readme",
   "dependencies": {
-    "@y/y": "^14.0.0-rc.23",
-    "lib0": "^1.0.0-rc.22"
+    "lib0": "1.0.0-rc.22"
   },
   "peerDependencies": {
-    "@y/protocols": "^1.0.6-rc.1",
+    "@y/protocols": "1.0.6-rc.1",
+    "@y/y": "14.0.0-rc.23",
     "prosemirror-model": "^1.7.1",
     "prosemirror-state": "^1.2.3",
     "prosemirror-view": "^1.9.10"
@@ -65,8 +65,10 @@
   "devDependencies": {
     "@rollup/plugin-commonjs": "^28.0.8",
     "@rollup/plugin-node-resolve": "^16.0.3",
-    "@y/protocols": "^1.0.6-rc.1",
-    "@y/websocket": "^4.0.0-rc.1",
+    "@y/prosemirror": "file:./",
+    "@y/protocols": "1.0.6-rc.1",
+    "@y/websocket": "4.0.0-rc.2",
+    "@y/y": "14.0.0-rc.23",
     "concurrently": "^10.0.3",
     "http-server": "^14.1.1",
     "jsdom": "^29.0.2",
