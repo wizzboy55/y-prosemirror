@@ -1,4 +1,5 @@
 // @ts-nocheck
+import 'fake-indexeddb/auto'
 import fs from 'fs'
 import path, { dirname } from 'path'
 import jsdom from 'jsdom'
@@ -17,6 +18,7 @@ import * as customCompare from './custom-compare.test.js'
 import * as ySyncRdt from './y-sync-rdt.test.js'
 import * as issueRepros from './issue-repros.test.js'
 import * as convergenceFuzz from './convergence-fuzz.test.js'
+import * as indexeddb from './indexeddb.test.js'
 // import * as tr from './tr.test.js'
 
 import { runTests } from 'lib0/testing'
@@ -71,7 +73,8 @@ runTests({
   customCompare,
   ySyncRdt,
   issueRepros,
-  convergenceFuzz
+  convergenceFuzz,
+  indexeddb
   // prosemirror,
   // tr
 }).then(success => {

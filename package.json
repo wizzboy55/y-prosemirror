@@ -25,6 +25,10 @@
       "types": "./dist/src/index.d.ts",
       "default": "./src/index.js"
     },
+    "./indexeddb": {
+      "types": "./dist/src/indexeddb.d.ts",
+      "default": "./src/indexeddb.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -71,6 +75,7 @@
     "@y/websocket": "4.0.0-rc.2",
     "@y/y": "14.0.0-rc.23",
     "concurrently": "^10.0.3",
+    "fake-indexeddb": "^6.0.0",
     "http-server": "^14.1.1",
     "jsdom": "^29.0.2",
     "playwright-core": "^1.50.0",
