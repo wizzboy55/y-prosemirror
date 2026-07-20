@@ -224,6 +224,93 @@ export const attributionMapperToConf = (mapper) => ({
 export const defaultAttributionConf = attributionMapperToConf(defaultMapAttributionToMark)
 
 /**
+ * The users named by an attr-op attribution, across all attribution
+ * dimensions (`insert` for a suggested set, `delete` for a suggested
+ * removal, `format` for a suggested re-format).
+ *
+ * @param {import('lib0/delta').Attribution} a
+ * @return {Array<string>}
+ */
+const attrAttributionUsers = (a) => array.unique([
+  ...(a.insert ?? []),
+  ...(a.delete ?? []),
+  ...(a.format != null ? object.map(a.format, v => v).flat() : [])
+])
+
+/**
+ * Lift a node delta's attributed attribute ops into a format-attribution map
+ * (`{ <attrKey>: <userIds> }`). ProseMirror has no model for per-attribute
+ * attribution, so a node's attr provenance is surfaced through the standard
+ * `format` attribution dimension of the op *wrapping* the node — which the
+ * attribution mapper renders as the `y-attributed-format` node mark (with the
+ * attr keys in `userIdsByAttr`). That mark is a node mark, so `nodeToDelta`
+ * reproduces it and the PM<->Y reconcile still reaches a fixpoint (the reason
+ * raw attr-op attribution must never survive into the view delta — see the
+ * attrs loop in {@link deltaAttributionToFormat}).
+ *
+ * Only settled (data-form) attributions are lifted; a `null` attribution on a
+ * settled attr op means "none".
+ *
+ * @param {delta.DeltaAny} nodeDelta
+ * @return {Record<string, Array<string>>|null}
+ */
+export const liftAttrAttributions = (nodeDelta) => {
+  /** @type {Record<string, Array<string>>|null} */
+  let out = null
+  for (const op of nodeDelta.attrs) {
+    const a = op.attribution
+    if (a == null) continue
+    ;(out ??= {})[/** @type {string} */ (op.key)] = attrAttributionUsers(a)
+  }
+  return out
+}
+
+/**
+ * Whether any attr op of `nodeDelta` participates in attribution — including
+ * instruction-form clears (`modifyAttr` with `attribution: null`), which is
+ * how an accepted/rejected attr suggestion announces itself.
+ *
+ * @param {delta.DeltaAny} nodeDelta
+ * @return {boolean}
+ */
+export const touchesAttrAttribution = (nodeDelta) => {
+  for (const op of nodeDelta.attrs) {
+    if (op.attribution !== undefined) return true
+  }
+  return false
+}
+
+/**
+ * Whether an op's attribution marks the node itself as suggested content —
+ * inserted or deleted as a whole. Such a node's attr provenance is part of
+ * the node suggestion, not a separate attr suggestion, so no lift applies.
+ *
+ * @param {import('lib0/delta').Attribution|null|undefined} a
+ * @return {boolean}
+ */
+export const nodeContentAttributed = (a) => a?.insert != null || a?.delete != null
+
+/**
+ * Merge a node's lifted attr attribution ({@link liftAttrAttributions}) into
+ * the attribution of the op wrapping it. Ops whose node is itself
+ * insert-/delete-attributed are left alone ({@link nodeContentAttributed}).
+ *
+ * @param {import('lib0/delta').Attribution|null|undefined} attribution the wrapping op's attribution
+ * @param {delta.DeltaAny} nodeDelta
+ * @return {import('lib0/delta').Attribution|null|undefined}
+ */
+const withLiftedAttrAttribution = (attribution, nodeDelta) => {
+  if (nodeContentAttributed(attribution)) return attribution
+  const lift = liftAttrAttributions(nodeDelta)
+  if (lift == null) return attribution
+  return /** @type {import('lib0/delta').Attribution} */ (object.assign(
+    {},
+    attribution ?? {},
+    { format: object.assign({}, attribution?.format ?? {}, lift) }
+  ))
+}
+
+/**
  * Transform delta with attributions to delta with formats (marks).
  * @param {delta.DeltaAny} d
  * @param {function} attributionsToFormat
@@ -232,13 +319,15 @@ export const deltaAttributionToFormat = (d, attributionsToFormat) => {
   const r = delta.create(d.name, $prosemirrorDelta)
   for (const attr of d.attrs) {
     // Drop attribution from attribute ops. ProseMirror has no model for
-    // per-attribute attribution (a node's attribution is carried by its
-    // `y-attributed-*` format marks), so `nodeToDelta` never reproduces it.
-    // Keeping it here makes the rendered delta differ from the PM-derived
-    // delta on every reconcile - the PM<->Y diff never reaches an empty
-    // fixpoint and `view().update`/`onAttrsChanged` loop forever (e.g. an
-    // inserted node whose attrs carry an empty `{ insert: [] }` attribution),
-    // eventually overflowing the stack inside `lib0/delta.diff`.
+    // per-attribute attribution, so `nodeToDelta` never reproduces it on the
+    // attr op itself. Keeping it here makes the rendered delta differ from
+    // the PM-derived delta on every reconcile - the PM<->Y diff never reaches
+    // an empty fixpoint and `view().update`/`onAttrsChanged` loop forever
+    // (e.g. an inserted node whose attrs carry an empty `{ insert: [] }`
+    // attribution), eventually overflowing the stack inside `lib0/delta.diff`.
+    // The provenance is not lost: it is lifted onto the op *wrapping* the
+    // node ({@link liftAttrAttributions}) and rendered as the round-trippable
+    // `y-attributed-format` node mark.
     const key = /** @type {string} */ (attr.key)
     if (delta.$setAttrOp.check(attr)) {
       r.setAttr(key, attr.value, null)
@@ -254,14 +343,28 @@ export const deltaAttributionToFormat = (d, attributionsToFormat) => {
     if (delta.$deleteOp.check(child)) {
       r.delete(child.delete)
     } else {
-      const format = child.attribution ? attributionsToFormat(child.format, child.attribution) : child.format
       if (delta.$insertOp.check(child)) {
-        r.insert(child.insert.map(c => delta.$deltaAny.check(c) ? deltaAttributionToFormat(c, attributionsToFormat) : c), format)
+        // One element at a time: nodes with attributed attrs need their own
+        // lifted format, and the builder re-coalesces equal formats anyway.
+        for (const c of child.insert) {
+          if (delta.$deltaAny.check(c)) {
+            const attribution = withLiftedAttrAttribution(child.attribution, c)
+            const format = attribution ? attributionsToFormat(child.format, attribution) : child.format
+            r.insert([deltaAttributionToFormat(c, attributionsToFormat)], format)
+          } else {
+            const format = child.attribution ? attributionsToFormat(child.format, child.attribution) : child.format
+            r.insert([c], format)
+          }
+        }
       } else if (delta.$textOp.check(child)) {
+        const format = child.attribution ? attributionsToFormat(child.format, child.attribution) : child.format
         r.insert(child.insert, format)
       } else if (delta.$retainOp.check(child)) {
+        const format = child.attribution ? attributionsToFormat(child.format, child.attribution) : child.format
         r.retain(child.retain, format)
       } else if (delta.$modifyOp.check(child)) {
+        const attribution = withLiftedAttrAttribution(child.attribution, child.value)
+        const format = attribution ? attributionsToFormat(child.format, attribution) : child.format
         // @ts-ignore
         r.modify(/** @type {any} */ (deltaAttributionToFormat(child.value, attributionsToFormat)), format)
       } else {

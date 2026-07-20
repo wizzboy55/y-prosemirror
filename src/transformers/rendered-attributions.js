@@ -1,5 +1,6 @@
 import * as delta from 'lib0/delta'
 import { Transformer, Template, createTransformResult } from 'lib0/delta/transformer'
+import { liftAttrAttributions, nodeContentAttributed, touchesAttrAttribution } from '../sync-utils.js'
 
 /**
  * # `renderedAttributions` — y-prosemirror's replacement for lib0's `fullAttributions`
@@ -84,10 +85,38 @@ const resolveAttr = (stateAttr, opAttr) => {
 }
 
 /**
+ * Merge a state node's lifted attr attribution ({@link liftAttrAttributions})
+ * into an *instruction-form* resolved attribution. A `null` resolved value is
+ * the clear-all instruction; when the node still carries attr provenance the
+ * content dimensions stay explicitly cleared while `format` carries the lift.
+ *
+ * @param {{[k:string]:any}|null} resolved
+ * @param {delta.DeltaAny | null} stateChild
+ * @return {{[k:string]:any}|null}
+ */
+const mergeLiftedInstruction = (resolved, stateChild) => {
+  // `resolved` is the state's complete truth for the node op — when it says
+  // the node itself is suggested content (inserted/deleted wholesale), its
+  // attrs belong to that suggestion and no separate attr lift applies.
+  if (nodeContentAttributed(resolved)) return resolved
+  const lift = stateChild == null ? null : liftAttrAttributions(stateChild)
+  if (lift == null) return resolved
+  if (resolved == null) {
+    return { insert: null, delete: null, format: lift }
+  }
+  return { ...resolved, format: { ...(resolved.format ?? {}), ...lift } }
+}
+
+/**
  * Build the content-free `full` delta carrying the resolved attribution at
  * exactly `d`'s attribution-touching positions, walking `state` (the
  * post-change render) in parallel. Mirrors `full-attributions.js`' `buildFull`,
  * with the overlay replaced by the render.
+ *
+ * Besides content attribution, this also lifts a node's *attr* attribution
+ * (resolved from the state node's own attribute ops) onto the op wrapping the
+ * node — see {@link liftAttrAttributions} for why attr provenance rides the
+ * `format` dimension.
  *
  * @param {delta.DeltaAny} d
  * @param {delta.DeltaAny | null} state
@@ -104,37 +133,60 @@ const buildFull = (d, state) => {
     }
   }
   /**
-   * Read ≤ `rem` positions of one uniform run at the cursor, advancing.
+   * Read ≤ `rem` positions of one uniform run at the cursor, advancing. Node
+   * elements are read one at a time so each node's attr lift can land on its
+   * own position.
    *
    * @param {number} rem
    * @return {{ take: number, attr: {[k:string]:any}|null|undefined, el: any }}
    */
   const readRun = (rem) => {
     if (cur == null) return { take: rem, attr: undefined, el: null }
-    const take = Math.min(cur.length - off, rem)
+    let take = Math.min(cur.length - off, rem)
+    let el = null
+    if (delta.$insertOp.check(cur)) {
+      el = cur.insert[off]
+      if (delta.$deltaAny.check(el)) {
+        take = 1
+      } else {
+        for (let i = 1; i < take; i++) {
+          if (delta.$deltaAny.check(cur.insert[off + i])) {
+            take = i
+            break
+          }
+        }
+      }
+    }
     const attr = /** @type {any} */ (cur).attribution
-    const el = delta.$insertOp.check(cur) ? cur.insert[off] : null
     off += take
     advance()
     return { take, attr, el }
+  }
+  /**
+   * Consume `n` state positions without emitting attribution (gap).
+   * @param {number} n
+   */
+  const consume = (n) => {
+    let rem = n
+    while (rem > 0) {
+      if (cur == null) break
+      const take = Math.min(cur.length - off, rem)
+      off += take
+      rem -= take
+      advance()
+    }
   }
   for (const op of d.children) {
     if (delta.$retainOp.check(op)) {
       if (op.attribution === undefined) {
         full.retain(op.retain) // untouched — gap; still consume state positions
-        let rem = op.retain
-        while (rem > 0) {
-          if (cur == null) break
-          const take = Math.min(cur.length - off, rem)
-          off += take
-          rem -= take
-          advance()
-        }
+        consume(op.retain)
       } else {
         let rem = op.retain
         while (rem > 0) {
-          const { take, attr } = readRun(rem)
-          full.retain(take, undefined, resolveAttr(attr, op.attribution))
+          const { take, attr, el } = readRun(rem)
+          const stateChild = delta.$deltaAny.check(el) ? el : null
+          full.retain(take, undefined, mergeLiftedInstruction(resolveAttr(attr, op.attribution), stateChild))
           rem -= take
         }
       }
@@ -142,23 +194,17 @@ const buildFull = (d, state) => {
       // data op: its attribution comes from the render diff and is already
       // complete — gap; consume the state positions it occupies
       full.retain(op.insert.length)
-      let rem = op.insert.length
-      while (rem > 0) {
-        if (cur == null) break
-        const take = Math.min(cur.length - off, rem)
-        off += take
-        rem -= take
-        advance()
-      }
+      consume(op.insert.length)
     } else if (delta.$insertOp.check(op)) {
-      full.retain(op.insert.length)
-      let rem = op.insert.length
-      while (rem > 0) {
-        if (cur == null) break
-        const take = Math.min(cur.length - off, rem)
-        off += take
-        rem -= take
-        advance()
+      // data op: content attribution comes from the render diff and is
+      // already complete, but a node element's *attr* attribution still needs
+      // the lift onto its own position. Skip insert-attributed ops — a
+      // freshly suggested node's attrs are part of the insertion.
+      const liftable = !nodeContentAttributed(/** @type {any} */ (op).attribution)
+      for (const elm of op.insert) {
+        const nodeLift = liftable && delta.$deltaAny.check(elm) ? liftAttrAttributions(elm) : null
+        full.retain(1, undefined, nodeLift == null ? undefined : { format: nodeLift })
+        consume(1)
       }
     } else if (delta.$deleteOp.check(op)) {
       // deleted content has no position in the post-change render — no state
@@ -166,10 +212,14 @@ const buildFull = (d, state) => {
     } else { // $modifyOp
       const { attr, el } = readRun(1)
       const stateChild = delta.$deltaAny.check(el) ? el : null
+      // A change that touches attr attribution (including instruction-form
+      // clears from an accepted/rejected attr suggestion) must re-emit the
+      // node's complete attribution even when the op itself carries none.
+      const emitAttribution = op.attribution !== undefined || touchesAttrAttribution(op.value)
       full.modify(
         buildFull(op.value, stateChild),
         undefined,
-        op.attribution === undefined ? undefined : resolveAttr(attr, op.attribution)
+        emitAttribution ? mergeLiftedInstruction(resolveAttr(attr, op.attribution), stateChild) : undefined
       )
     }
   }
