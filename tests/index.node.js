@@ -23,6 +23,7 @@ import * as migration from './migration.test.js'
 import * as schemaConflict from './schema-conflict.test.js'
 import * as caretBias from './caret-bias.test.js'
 import * as undoPause from './undo-pause.test.js'
+import * as v1Compat from './v1-compat.test.js'
 // import * as tr from './tr.test.js'
 
 import { runTests } from 'lib0/testing'
@@ -82,7 +83,8 @@ runTests({
   migration,
   schemaConflict,
   caretBias,
-  undoPause
+  undoPause,
+  v1Compat
   // prosemirror,
   // tr
 }).then(success => {
