@@ -88,7 +88,8 @@
     "prosemirror-view": "^1.26.2",
     "rollup": "^4.52.5",
     "standard": "^17.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yjs13": "npm:yjs@^13.6.31"
   },
   "engines": {
     "npm": ">=8.0.0",
