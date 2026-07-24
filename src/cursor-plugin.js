@@ -150,6 +150,17 @@ export const createDecorations = (
  */
 
 /**
+ * The default awareness filter: render every client except the local one.
+ * Hoisted so the awareness listener can recognize it and skip re-rendering on
+ * local-only changes (see `awarenessListener`).
+ *
+ * @param {number} currentClientId
+ * @param {number} userClientId
+ * @return {boolean}
+ */
+const defaultAwarenessStateFilter = (currentClientId, userClientId) => currentClientId !== userClientId
+
+/**
  * A prosemirror plugin that listens to awareness information on Yjs.
  * This requires that a `prosemirrorPlugin` is also bound to the prosemirror.
  *
@@ -166,7 +177,7 @@ export const createDecorations = (
 export const yCursorPlugin = (
   awareness,
   {
-    awarenessStateFilter = (currentClientId, userClientId) => currentClientId !== userClientId,
+    awarenessStateFilter = defaultAwarenessStateFilter,
     cursorBuilder = defaultCursorBuilder,
     selectionBuilder = defaultSelectionBuilder,
     cursorStateField = 'cursor',
@@ -228,11 +239,29 @@ export const yCursorPlugin = (
       decorations: (state) => yCursorPluginKey.getState(state)
     },
     view: (view) => {
-      const awarenessListener = () => {
+      /**
+       * @param {{ added?: number[], updated?: number[], removed?: number[] } | undefined} [change]
+       */
+      const awarenessListener = (change) => {
         if (view.isDestroyed) {
           return
         }
-        view.dispatch(view.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true }))
+        // A change that touches ONLY this client's own state cannot alter the
+        // rendered decorations under the default filter (which never renders
+        // the local client). Publishing the local cursor fires this listener
+        // on EVERY keystroke — dispatching unconditionally re-entered the
+        // host's full plugin stack (a whole applyTransaction pass) per
+        // keystroke for a decoration set that could not have changed. Custom
+        // filters may render the local client, so they keep the old behavior.
+        if (awarenessStateFilter === defaultAwarenessStateFilter && change != null) {
+          const touched = [...(change.added || []), ...(change.updated || []), ...(change.removed || [])]
+          if (touched.length > 0 && touched.every((clientId) => clientId === awareness.clientID)) {
+            return
+          }
+        }
+        // No content steps: keep the decoration refresh out of the undo
+        // plugin's capture path.
+        view.dispatch(view.state.tr.setMeta(yCursorPluginKey, { awarenessUpdated: true }).setMeta('addToHistory', false))
       }
 
       /**
