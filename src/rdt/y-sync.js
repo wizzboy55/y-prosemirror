@@ -226,10 +226,6 @@ export class YSyncRdt extends ObservableV2 {
     // write, and every consumer of `delta` must keep seeing a post-write
     // state until the queue drains.
     const uncertain = this._stateOverride !== null || doc._transaction !== null || doc._transactionCleanups.length > 0
-    // Pin `expected` before the transact: renderer 'change' cascades fire
-    // synchronously inside it and must not shift the baseline.
-    const expected = delta.cloneDeep(/** @type {any} */ (this.delta))
-    expected.apply(delta.cloneDeep(/** @type {any} */ (d)), { final: true, move: true })
     // Moved pending suggestions (#245): data ops carrying insert attribution
     // are a view-mode structural move of suggestion content (split/join/drag
     // — see buildAttributionCorrection's move detection and the
@@ -239,6 +235,45 @@ export class YSyncRdt extends ObservableV2 {
     // (`tr.local` guard) — the content lands in the suggestion overlay only
     // and is re-attributed as a pending suggestion on render.
     const { base, moved } = splitMovedInsertions(d)
+    // Fast path — plain renderer (`baseRenderer` is `null`: no attribution
+    // overlay, no renderer 'change' cascades, no deleted-but-rendered nodes)
+    // in steady state, with no moved pending insertions (a suggestion-context
+    // artifact that cannot arise under a plain renderer): the native
+    // `YType#applyDelta` return IS the complete RDT fix — documented as `null`
+    // when the change applied cleanly, and a revert only for changes
+    // addressing deleted-but-rendered nodes, which require a DiffRenderer.
+    // This skips the expected/actual clone + diff dance below, whose freshly
+    // cloned trees carry no memoized fingerprints and force an O(document)
+    // re-serialize + re-hash on EVERY local write (the dominant per-keystroke
+    // cost on large documents). Suggestion mode (any non-null renderer) and
+    // the uncertain window keep the full computation.
+    if (!uncertain && this.renderer == null && (moved == null || moved.isEmpty())) {
+      /** @type {delta.DeltaBuilder<any> | null} */
+      let fix = null
+      this._applying = true
+      try {
+        if (!base.isEmpty()) {
+          doc.transact(() => {
+            fix = this.ytype.applyDelta(base, this.origin, { renderer: this.renderer })
+          }, this.origin)
+        }
+      } catch (err) {
+        // Should-never-happen guard (a well-formed local delta failing to
+        // apply): ops before the failing one have landed. Without a pinned
+        // `expected` there is no cheap fix to compute — enter the uncertain
+        // window so the state getter serves a fresh render and the next
+        // emission self-heals via diff-of-full-renders.
+        console.warn('[y/prosemirror] ytype.applyDelta failed - entering the uncertain window to self-heal', err)
+        this._stateOverride = this._render()
+      } finally {
+        this._applying = false
+      }
+      return fix != null && !(/** @type {any} */ (fix).isEmpty()) ? fix : null
+    }
+    // Pin `expected` before the transact: renderer 'change' cascades fire
+    // synchronously inside it and must not shift the baseline.
+    const expected = delta.cloneDeep(/** @type {any} */ (this.delta))
+    expected.apply(delta.cloneDeep(/** @type {any} */ (d)), { final: true, move: true })
     this._applying = true
     try {
       if (!base.isEmpty()) {
