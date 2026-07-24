@@ -518,6 +518,22 @@ export function fragmentToPm (fragment, tr) {
 }
 
 /**
+ * Memo of `nodeToDelta` results keyed by the (immutable) ProseMirror node, then by
+ * the `canonicalize` flag. ProseMirror nodes are immutable and reference-stable for
+ * unchanged subtrees across a transaction, so a re-snapshot of a document where only
+ * one block changed reuses every unchanged block's cached delta — turning the sync
+ * plugin's per-keystroke `nodeToDelta(doc)` from O(document) into ~O(edited blocks).
+ *
+ * Safety: the cached delta is a `done(false)` snapshot that this module never mutates
+ * in place (the RDTs treat `nodeToDelta` output as an immutable shared-read value, and
+ * `delta.diff` only reads its inputs), so sharing it across snapshots is sound. Keyed
+ * on the node object via a WeakMap, entries are collected with their nodes.
+ *
+ * @type {WeakMap<import('prosemirror-model').Node, [ProsemirrorDelta?, ProsemirrorDelta?]>}
+ */
+const nodeToDeltaMemo = new WeakMap()
+
+/**
  * @param {Node} n
  * @param {string?} nodeName
  * @param {boolean} [canonicalize] When `true`, the emitted name has the
@@ -526,6 +542,17 @@ export function fragmentToPm (fragment, tr) {
  * @return {ProsemirrorDelta}
  */
 export const nodeToDelta = (n, nodeName = n.type.name, canonicalize = false) => {
+  // Only the default-name case (the recursive path, and any caller passing the node's
+  // own type name) is cacheable — a caller overriding the root name (e.g. docToDelta's
+  // `null`) produces a name-dependent result that must not be shared.
+  const cacheable = nodeName === n.type.name
+  const canonicalSlot = canonicalize ? 1 : 0
+  if (cacheable) {
+    const cached = nodeToDeltaMemo.get(n)
+    if (cached !== undefined && cached[canonicalSlot] !== undefined) {
+      return /** @type {ProsemirrorDelta} */ (cached[canonicalSlot])
+    }
+  }
   const d = delta.create(canonicalize && nodeName != null ? canonicalNodeName(nodeName) : nodeName, $prosemirrorDelta)
   // `y-attributed` is a render-only marker injected when a node is rendered
   // under its `--attributed` variant (see the injections in `applyNodeFormat`
@@ -542,7 +569,16 @@ export const nodeToDelta = (n, nodeName = n.type.name, canonicalize = false) => 
   n.content.content.forEach(c => {
     d.insert(c.isText ? (c.text ?? []) : [nodeToDelta(c, undefined, canonicalize)], marksToFormattingAttributes(c.marks))
   })
-  return d.done(false)
+  const result = /** @type {ProsemirrorDelta} */ (d.done(false))
+  if (cacheable) {
+    let slot = nodeToDeltaMemo.get(n)
+    if (slot === undefined) {
+      slot = [undefined, undefined]
+      nodeToDeltaMemo.set(n, slot)
+    }
+    slot[canonicalSlot] = result
+  }
+  return result
 }
 
 /**
